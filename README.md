@@ -63,7 +63,7 @@ A SMAPI mod that replaces the Stardew Valley farmer with a chibi whale-girl maid
 
 1. `art/prompts.md`：给图像模型的提示词（品红背景、固定网格、每次附上走路图当参考）。
 2. `art/source/`：模型生成的原图（1024×1536）。
-3. `art/pixelize.py`：把原图转成真正的低分辨率像素帧——抠品红背景、按块取主色、压缩调色板、脚底和头部对齐；`--strip-tool` 能尽量抠掉图里的工具（游戏会自己画），但效果不如直接让模型画空手姿势，`--ref r,c --height 26` 按某一格的站立高度统一大小；`--front` 标出正脸的格子，取样时会多试几种起点，挑左右眼最对称的（同一行共用一个起点，动画不抖），再把眼睛那几行按脸的中线镜像，保证两只眼一样大；本来就歪头的格子用 `--keep-eyes` 排除。
+3. `art/pixelize.py`：把原图转成真正的低分辨率像素帧——抠品红背景、按块取主色、压缩调色板、脚底和头部对齐；`--strip-tool` 能尽量抠掉图里的工具（游戏会自己画），但效果不如直接让模型画空手姿势，`--ref r,c --height 26` 按某一格的站立高度统一大小；`--front` 标出正脸的格子，取样时会多试几种起点，挑左右眼最对称的（同一行共用一个起点，动画不抖），再把眼睛那几行镜像，保证两只眼一样大（中线选「现有两眼最对称」的那条，不改眼距）；本来就歪头的格子用 `--keep-eyes` 排除。闭眼的帧眼线太细，用 `--dark-priority 0.25 --dark-cells …` 让脸上的深色细线优先保留。
 
 ```bash
 python art/pixelize.py art/source/1-full.png WhaleFarmer/assets/walk.png --cols 4 --rows 4 --block 10.33 --front 0
@@ -71,7 +71,7 @@ python art/pixelize.py art/source/4-tools.png WhaleFarmer/assets/tools.png --col
 python art/pixelize.py art/source/5-melee.png WhaleFarmer/assets/melee.png --cols 4 --rows 3 --ref 0,0 --height 26 --cell 40x40 --front 0
 python art/pixelize.py art/source/6-crouch.png WhaleFarmer/assets/crouch.png --cols 4 --rows 3 --ref 0,2 --height 26 --cell 40x40 --front 0
 python art/pixelize.py art/source/7-fishing.png WhaleFarmer/assets/fishing.png --cols 3 --rows 3 --ref 0,0 --height 26 --cell 40x40 --front 0
-python art/pixelize.py art/source/8-eat.png WhaleFarmer/assets/eat.png --cols 6 --rows 1 --ref 0,1 --height 26 --cell 40x40 --front 0 --keep-eyes 0:4
+python art/pixelize.py art/source/8-eat.png WhaleFarmer/assets/eat.png --cols 6 --rows 1 --ref 0,1 --height 26 --cell 40x40 --front 0 --keep-eyes 0:4 --dark-priority 0.25 --dark-cells 0:2,0:5
 python art/pixelize.py art/source/9-misc.png WhaleFarmer/assets/misc.png --cols 4 --rows 2 --ref 1,3 --height 26 --cell 40x40 --front 1,0:0
 ```
 

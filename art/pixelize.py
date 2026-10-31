@@ -26,6 +26,8 @@ ap.add_argument("--preview", default="")
 ap.add_argument("--ref", default="", help="用第 r,c 格（从 0 数）的高度定比例：这一格缩成 --height 高")
 ap.add_argument("--strip-tool", action="store_true", help="抠掉灰色工具头、棕色手柄/鱼竿、灰蓝水壶（游戏会自己画工具）")
 ap.add_argument("--front", default="", help="正脸格子，取样时优先保证左右对称：'0' 是第 0 行整行，'1:3' 是第 1 行第 3 列，逗号分隔")
+ap.add_argument("--dark-priority", type=float, default=0.0, help="一块里深色占到这个比例就取深色（保住闭眼这种细线），比如 0.25；0 表示关闭。只在脸上、且只对 --dark-cells 里的格子生效")
+ap.add_argument("--dark-cells", default="", help="开深色优先的格子（格式同 --front）；会把嘴巴也加粗，所以只给闭眼的帧用")
 ap.add_argument("--keep-eyes", default="", help="正脸里本来就不对称的格子（比如歪头），不做眼睛镜像；格式同 --front")
 args = ap.parse_args()
 CELL_W, CELL_H = (int(v) for v in args.cell.split("x"))
@@ -49,6 +51,8 @@ _q = Image.fromarray(np.where(fg[..., None], im, 0).astype(np.uint8)).quantize(
     colors=args.colors + 1, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
 qidx = np.array(_q)
 palette = np.array(_q.getpalette()[:3 * (args.colors + 1)]).reshape(-1, 3)
+DARK = palette.mean(1) < 60  # 描边、眼线、嘴这类深色
+SKIN = (palette[:, 0] >= 235) & (palette[:, 2] <= 245) & (palette[:, 0] - palette[:, 2] >= 10)
 
 
 def runs(a, want):
@@ -111,7 +115,7 @@ def is_front(ri, ci):
     return in_cells(args.front, ri, ci)
 
 
-def sample(cfg, bottom, head_cx, dx, dy):
+def sample(cfg, bottom, head_cx, dx, dy, dark_on=False):
     """按给定的取样起点偏移，把一格缩成 CELL_W x CELL_H。返回 (RGBA 图, 平均纯度)。"""
     out = np.zeros((CELL_H, CELL_W, 4), dtype=np.uint8)
     purity = []
@@ -126,9 +130,17 @@ def sample(cfg, bottom, head_cx, dx, dy):
             fgb = cfg[ya:yb, xa:xb]
             if fgb.mean() < 0.5:
                 continue
-            counts = np.bincount(qidx[ya:yb, xa:xb][fgb])
+            counts = np.bincount(qidx[ya:yb, xa:xb][fgb], minlength=len(palette))
             purity.append(counts.max() / counts.sum())
-            out[ty, tx] = [*palette[counts.argmax()].astype(np.uint8), 255]
+            pick = counts.argmax()
+            # 闭着的眼睛、嘴巴这种细线只有半个块高，按"谁最多"会被肤色吃掉；
+            # 深色占到 --dark-priority 以上就取深色，保住细线
+            # 只在脸上（块里有不少肤色）这么做，身上的描边保持原来的粗细
+            dark = counts * DARK
+            if (dark_on and args.dark_priority and not DARK[pick] and dark.sum() >= args.dark_priority * counts.sum()
+                    and (counts * SKIN).sum() >= 0.3 * counts.sum()):
+                pick = dark.argmax()
+            out[ty, tx] = [*palette[pick].astype(np.uint8), 255]
     return out, (float(np.mean(purity)) if purity else 0.0)
 
 
@@ -170,7 +182,7 @@ for ri in range(args.rows):
         head_cx = (hx.min() + hx.max()) / 2
         front = is_front(ri, ci)
         for k, (fx, fy) in enumerate(OFFSETS):
-            cand, purity = sample(cfg, bottom, head_cx, fx * block, fy * block)
+            cand, purity = sample(cfg, bottom, head_cx, fx * block, fy * block, in_cells(args.dark_cells, ri, ci))
             tried[ci, k] = (purity + (2.0 * symmetry(cand) if front else 0.0), cand)
     best_k = max(range(len(OFFSETS)), key=lambda k: sum(tried[ci, k][0] for ci in range(args.cols)))
     for ci in range(args.cols):
@@ -302,15 +314,26 @@ def mirror_eyes(cell):
         return  # 背面或侧脸，没有正脸
     # 刘海下沿第一行露出的皮肤就在眼睛那一带：从它上面 1 行到下面 3 行
     y0, y1 = max(ys.min() - 1, 0), min(ys.min() + 3, cell.shape[0] - 1)
-    # 中线：眼睛这几行里头的左右边缘的中点
-    centers = []
-    for y in range(y0, y1 + 1):
-        xo = np.where(opaque[y])[0]
-        if len(xo):
-            centers.append((xo.min() + xo.max()) / 2)
-    axis = round(float(np.median(centers)) * 2) / 2  # 落在某列正中或两列之间
     fx0, fx1 = xs.min() - 1, xs.max() + 1  # 脸的左右范围（多留一格描边）
     band = slice(y0, y1 + 1)
+    # 中线：不能按头发左右边缘算（她一边头发更蓬，中线会偏、镜像后两眼间距变大）。
+    # 在脸中心附近试几条候选线，挑现有眼睛本来就最对称的那条，这样只修大小、不改间距
+    c0 = (xs.min() + xs.max()) / 2
+    eyes = (cell[band, :, 3] > 0) & ~skin[band]
+
+    def axis_score(ax):
+        same = total = 0
+        for x in range(max(fx0, 0), min(fx1, cell.shape[1] - 1) + 1):
+            mx = int(round(2 * ax - x))
+            if mx <= x or not (fx0 <= mx <= fx1) or mx >= cell.shape[1]:
+                continue
+            for y in range(eyes.shape[0]):
+                if eyes[y, x] or eyes[y, mx]:
+                    total += 1
+                    same += bool((cell[y0 + y, x] == cell[y0 + y, mx]).all())
+        return same / total if total else 0.0
+
+    axis = max(np.arange(round(c0 * 2) / 2 - 2, round(c0 * 2) / 2 + 2.01, 0.5), key=axis_score)
 
     def eye_pixels(lo, hi):
         part = cell[band, max(lo, 0):hi]
