@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>WhaleFarmer</AssemblyName>
+    <RootNamespace>WhaleFarmer</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <!-- 游戏目录；可用 dotnet build -p:GamePath=... 覆盖 -->
+    <GamePath Condition="'$(GamePath)' == ''">E:\SteamLibrary\steamapps\common\Stardew Valley</GamePath>
+    <SmapiPath Condition="'$(SmapiPath)' == '' And Exists('$(GamePath)\StardewModdingAPI.dll')">$(GamePath)</SmapiPath>
+    <SmapiPath Condition="'$(SmapiPath)' == ''">E:\Darian\Downloads\toolchain\smapi-files</SmapiPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Stardew Valley"><HintPath>$(GamePath)\Stardew Valley.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="MonoGame.Framework"><HintPath>$(GamePath)\MonoGame.Framework.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="StardewModdingAPI"><HintPath>$(SmapiPath)\StardewModdingAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SMAPI.Toolkit.CoreInterfaces"><HintPath>$(SmapiPath)\smapi-internal\SMAPI.Toolkit.CoreInterfaces.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(SmapiPath)\smapi-internal\0Harmony.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="manifest.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

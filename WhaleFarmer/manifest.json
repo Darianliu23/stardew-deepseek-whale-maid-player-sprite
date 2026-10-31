@@ -1,0 +1,10 @@
+{
+  "Name": "Whale Farmer",
+  "Author": "Darian",
+  "Version": "1.0.0",
+  "Description": "把玩家角色换成蓝色大肥鱼（DeepSeek 鲸鱼娘）像素小人。按 F9 切换回原版外观。",
+  "UniqueID": "Darian.WhaleFarmer",
+  "EntryDll": "WhaleFarmer.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}
