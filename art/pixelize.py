@@ -26,6 +26,7 @@ ap.add_argument("--preview", default="")
 ap.add_argument("--ref", default="", help="用第 r,c 格（从 0 数）的高度定比例：这一格缩成 --height 高")
 ap.add_argument("--strip-tool", action="store_true", help="抠掉灰色工具头、棕色手柄/鱼竿、灰蓝水壶（游戏会自己画工具）")
 ap.add_argument("--front", default="", help="正脸格子，取样时优先保证左右对称：'0' 是第 0 行整行，'1:3' 是第 1 行第 3 列，逗号分隔")
+ap.add_argument("--keep-eyes", default="", help="正脸里本来就不对称的格子（比如歪头），不做眼睛镜像；格式同 --front")
 args = ap.parse_args()
 CELL_W, CELL_H = (int(v) for v in args.cell.split("x"))
 
@@ -97,13 +98,17 @@ else:
 print(f"block size {block:.2f}")
 print("cell heights:", {k: round((v[1] - v[0] + 1) / block, 1) for k, v in cells.items()})
 
-def is_front(ri, ci):
-    """--front 指定的正脸格子："0" 表示第 0 行整行，"1:3" 表示第 1 行第 3 列。"""
-    for item in filter(None, args.front.split(",")):
+def in_cells(spec, ri, ci):
+    """格子列表："0" 表示第 0 行整行，"1:3" 表示第 1 行第 3 列，逗号分隔。"""
+    for item in filter(None, spec.split(",")):
         r_, _, c_ = item.partition(":")
         if int(r_) == ri and (not c_ or int(c_) == ci):
             return True
     return False
+
+
+def is_front(ri, ci):
+    return in_cells(args.front, ri, ci)
 
 
 def sample(cfg, bottom, head_cx, dx, dy):
@@ -276,6 +281,56 @@ for ri in range(args.rows):
                     filled_any = True
             if not filled_any:
                 break
+
+def mirror_eyes(cell):
+    """
+    正脸的眼睛只有 2~3 像素宽，取样稍微错开一点就一大一小。
+    找到刘海下面露出的脸（肤色）最上面那行，取它上 1 行到下 3 行（眼睛那一带），按头的中线左右镜像：
+    哪一半脸上的"非肤色"像素多（眼睛画得更完整），就用那一半盖住另一半。
+    """
+    rgb = cell[..., :3].astype(int)
+    opaque = cell[..., 3] > 0
+    skin = opaque & (rgb[..., 0] >= 235) & (rgb[..., 2] <= 245) & (rgb[..., 0] - rgb[..., 2] >= 10)
+    rows = np.where(opaque.any(1))[0]
+    if len(rows) == 0:
+        return
+    # 只看头部：上面 7 行是白色女仆头饰（颜色和皮肤几乎一样，会被误当成脸），下面别把手和腿算进来
+    skin[:rows[0] + 7] = False
+    skin[rows[0] + 20:] = False
+    ys, xs = np.where(skin)
+    if len(ys) < 8:
+        return  # 背面或侧脸，没有正脸
+    # 刘海下沿第一行露出的皮肤就在眼睛那一带：从它上面 1 行到下面 3 行
+    y0, y1 = max(ys.min() - 1, 0), min(ys.min() + 3, cell.shape[0] - 1)
+    # 中线：眼睛这几行里头的左右边缘的中点
+    centers = []
+    for y in range(y0, y1 + 1):
+        xo = np.where(opaque[y])[0]
+        if len(xo):
+            centers.append((xo.min() + xo.max()) / 2)
+    axis = round(float(np.median(centers)) * 2) / 2  # 落在某列正中或两列之间
+    fx0, fx1 = xs.min() - 1, xs.max() + 1  # 脸的左右范围（多留一格描边）
+    band = slice(y0, y1 + 1)
+
+    def eye_pixels(lo, hi):
+        part = cell[band, max(lo, 0):hi]
+        sk = skin[band, max(lo, 0):hi]
+        return int(((part[..., 3] > 0) & ~sk).sum())
+
+    left = eye_pixels(fx0, int(np.ceil(axis)))
+    right = eye_pixels(int(np.floor(axis)) + 1, fx1 + 1)
+    # 只镜像脸的范围，两侧的头发和鳍耳保持原样，免得这几行和上下接不上
+    src_cols = range(max(fx0, 0), int(np.ceil(axis))) if left >= right else range(int(np.floor(axis)) + 1, fx1 + 1)
+    for x in src_cols:
+        mx = int(round(2 * axis - x))
+        if fx0 <= mx <= fx1 and 0 <= mx < cell.shape[1] and mx != x:
+            cell[band, mx] = cell[band, x]
+
+
+for ri in range(args.rows):
+    for ci in range(args.cols):
+        if is_front(ri, ci) and not in_cells(args.keep_eyes, ri, ci):
+            mirror_eyes(sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W])
 
 Image.fromarray(sheet, "RGBA").save(args.out)
 if args.preview:
