@@ -148,31 +148,80 @@ if args.strip_tool:
                 near_body |= np.roll(np.roll(body, dy, 0), dx, 1)
         sheet[dark & ~near_body] = 0
 
-    # 工具的暗面颜色和头发描边太像，颜色规则抠不干净；每格只保留最大的那块（身体），飘着的碎片删掉
-    for ri in range(args.rows):
-        for ci in range(args.cols):
-            ys, xs = slice(ri * CELL_H, (ri + 1) * CELL_H), slice(ci * CELL_W, (ci + 1) * CELL_W)
-            a = sheet[ys, xs, 3] > 0
-            label = np.zeros(a.shape, dtype=int)
-            sizes = [0]
-            for sy, sx in zip(*np.where(a)):
-                if label[sy, sx]:
-                    continue
-                sizes.append(0)
-                stack = [(sy, sx)]
-                label[sy, sx] = len(sizes) - 1
-                while stack:
-                    y, x = stack.pop()
-                    sizes[-1] += 1
-                    for dy in (-1, 0, 1):
-                        for dx in (-1, 0, 1):
-                            ny, nx = y + dy, x + dx
-                            if 0 <= ny < a.shape[0] and 0 <= nx < a.shape[1] and a[ny, nx] and not label[ny, nx]:
-                                label[ny, nx] = len(sizes) - 1
-                                stack.append((ny, nx))
-            if len(sizes) > 2:
-                keep = int(np.argmax(sizes))
-                sheet[ys, xs][(label != keep) & a] = 0
+
+def grow(mask, n):
+    """八邻域膨胀 n 次（格子边界外当作空）。"""
+    for _ in range(n):
+        p = np.pad(mask, 1)
+        mask = np.zeros_like(mask)
+        for dy in (0, 1, 2):
+            for dx in (0, 1, 2):
+                mask |= p[dy:dy + mask.shape[0], dx:dx + mask.shape[1]]
+    return mask
+
+
+def outside(mask):
+    """从格子边缘出发，四邻域能走到的空白；走不到的空白就是身体里的洞。"""
+    out = np.zeros_like(mask)
+    stack = [(y, x) for y in range(mask.shape[0]) for x in (0, mask.shape[1] - 1) if not mask[y, x]]
+    stack += [(y, x) for x in range(mask.shape[1]) for y in (0, mask.shape[0] - 1) if not mask[y, x]]
+    for y, x in stack:
+        out[y, x] = True
+    while stack:
+        y, x = stack.pop()
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if 0 <= ny < mask.shape[0] and 0 <= nx < mask.shape[1] and not mask[ny, nx] and not out[ny, nx]:
+                out[ny, nx] = True
+                stack.append((ny, nx))
+    return out
+
+
+for ri in range(args.rows):
+    for ci in range(args.cols):
+        cell = sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W]  # 视图，改它就是改 sheet
+        a = cell[..., 3] > 0
+
+        # 每格只保留最大的那块（身体）：飘着的工具碎片、闪光点之类都删掉
+        label = np.zeros(a.shape, dtype=int)
+        sizes = [0]
+        for sy, sx in zip(*np.where(a)):
+            if label[sy, sx]:
+                continue
+            sizes.append(0)
+            stack = [(sy, sx)]
+            label[sy, sx] = len(sizes) - 1
+            while stack:
+                y, x = stack.pop()
+                sizes[-1] += 1
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < a.shape[0] and 0 <= nx < a.shape[1] and a[ny, nx] and not label[ny, nx]:
+                            label[ny, nx] = len(sizes) - 1
+                            stack.append((ny, nx))
+        if len(sizes) > 2:
+            keep = int(np.argmax(sizes))
+            cell[(label != keep) & a] = 0
+            a = cell[..., 3] > 0
+
+        # 补洞：工具挡在身前，抠掉后身体中间会空一块。四面被身体围住的空白是洞；
+        # 再把轮廓"闭合"一格（膨胀 1 再收缩 1），补上 1~2 像素宽的小缺口（双脚之间的缝更宽，不会被填）。
+        # 然后用周围颜色一圈圈往里填
+        closed = ~grow(outside(grow(a, 1)), 1)
+        hole = ~a & (~outside(a) | closed)
+        while hole.any():
+            filled_any = False
+            for y, x in zip(*np.where(hole)):
+                nb = [cell[ny, nx] for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1))
+                      if 0 <= ny < a.shape[0] and 0 <= nx < a.shape[1] and cell[ny, nx, 3] > 0]
+                if nb:
+                    # 优先用非描边色，免得洞被填成一片黑
+                    light = [c for c in nb if c[:3].astype(int).mean() >= 70]
+                    cell[y, x] = (light or nb)[0]
+                    hole[y, x] = False
+                    filled_any = True
+            if not filled_any:
+                break
 
 Image.fromarray(sheet, "RGBA").save(args.out)
 if args.preview:
