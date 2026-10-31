@@ -28,6 +28,7 @@ ap.add_argument("--strip-tool", action="store_true", help="抠掉灰色工具头
 ap.add_argument("--front", default="", help="正脸格子，取样时优先保证左右对称：'0' 是第 0 行整行，'1:3' 是第 1 行第 3 列，逗号分隔")
 ap.add_argument("--dark-priority", type=float, default=0.0, help="一块里深色占到这个比例就取深色（保住闭眼这种细线），比如 0.25；0 表示关闭。只在脸上、且只对 --dark-cells 里的格子生效")
 ap.add_argument("--dark-cells", default="", help="开深色优先的格子（格式同 --front）；会把嘴巴也加粗，所以只给闭眼的帧用")
+ap.add_argument("--eye-gap", type=int, default=0, help="正脸两只瞳孔内侧之间统一隔几格（比如 4）；0 表示不调整")
 ap.add_argument("--keep-eyes", default="", help="正脸里本来就不对称的格子（比如歪头），不做眼睛镜像；格式同 --front")
 args = ap.parse_args()
 CELL_W, CELL_H = (int(v) for v in args.cell.split("x"))
@@ -170,8 +171,72 @@ sheet = np.zeros((args.rows * CELL_H, args.cols * CELL_W, 4), dtype=np.uint8)
 # 所以试一圈起点：正脸看左右对称，其他看每块颜色纯不纯（线条干净）。
 # 同一行是同一个方向的连续动画，整行共用一个起点，否则相邻帧会错开 1 像素、走起来抖
 OFFSETS = [(fx, fy) for fx in np.arange(-0.5, 0.5, 1 / 6) for fy in (0.0, 0.25, 0.5)]
+
+
+def source_eye_mid(cfg, top, bottom):
+    """
+    在高清原图里找两只眼睛的瞳孔（偏亮的蓝），返回两只瞳孔中心的正中间（原图 x 坐标）。
+    只在刘海下面露出的脸（肤色范围）里找，免得把头发高光当成瞳孔；闭着眼睛找不到就返回 None。
+    """
+    h = bottom - top
+    rr, gg, bb = r, g, b
+    skin_src = cfg & (rr >= 235) & (rr - bb >= 20)
+    skin_src[:top + int(h * 0.15)] = False
+    skin_src[top + int(h * 0.6):] = False
+    ys, xs = np.where(skin_src)
+    if len(ys) < 50:
+        return None
+    y_lo, y_hi = ys.min(), ys.min() + int(h * 0.25)
+    lum = (rr + gg + bb) / 3
+    iris = cfg & (bb > 200) & (bb - rr > 90) & (lum > 120)
+    iris[:y_lo] = False
+    iris[y_hi:] = False
+    iris[:, :xs.min()] = False
+    iris[:, xs.max() + 1:] = False
+    iy, ix = np.where(iris)
+    if len(ix) < 20:
+        return None
+    # 按 x 方向最大的空隙分成左右两团
+    ux = np.unique(ix)
+    if len(ux) < 2:
+        return None
+    cut = ux[np.argmax(np.diff(ux))]
+    left, right = ix[ix <= cut], ix[ix > cut]
+    if len(left) < 8 or len(right) < 8:
+        return None
+    # 两只瞳孔内侧之间的空隙（取 95%/5% 分位，避开零星噪点）
+    gap = np.percentile(right, 5) - np.percentile(left, 95)
+    return (left.mean() + right.mean()) / 2, gap
+
+
+def eye_gap(cell, axis):
+    """像素图里两只瞳孔（偏亮的蓝）内侧之间隔了几格；找不到返回 None。"""
+    rows = np.where((cell[..., 3] > 0).any(1))[0]
+    if len(rows) == 0:
+        return None
+    part = cell[rows[0] + 7:rows[0] + 18].astype(int)
+    op = part[..., 3] > 0
+    iris = op & (part[..., 2] > 195) & (part[..., 2] - part[..., 0] > 100)
+    skin_ = op & (part[..., 0] >= 235) & (part[..., 2] <= 245) & (part[..., 0] - part[..., 2] >= 10)
+    # 只认紧挨着皮肤的亮蓝：头发上的高光不贴脸，不会被误当成瞳孔
+    touch = np.zeros_like(skin_)
+    touch[:, 1:] |= skin_[:, :-1]
+    touch[:, :-1] |= skin_[:, 1:]
+    iris &= touch
+    best = None
+    for y in range(part.shape[0]):
+        xs = np.where(iris[y])[0]
+        left, right = xs[xs < axis], xs[xs > axis]
+        if len(left) and len(right):
+            gap = right.min() - left.max() - 1
+            best = gap if best is None else min(best, gap)
+    return best
+
+
+EYE_AXIS = {}  # (ri, ci) -> 像素图里的眼睛中线
 for ri in range(args.rows):
     tried = {}  # (ci, 偏移序号) -> (分数, 图)
+    geom = {}  # ci -> (head_cx, 原图里的两眼中点)
     for ci in range(args.cols):
         top, bottom, x0, x1 = cells[ri, ci]
         own = np.zeros_like(fg)
@@ -181,12 +246,23 @@ for ri in range(args.rows):
         hx = np.where(cfg[top:head_bottom + 1].any(0))[0]
         head_cx = (hx.min() + hx.max()) / 2
         front = is_front(ri, ci)
+        geom[ci] = (head_cx, source_eye_mid(cfg, top, bottom) if front else None)
         for k, (fx, fy) in enumerate(OFFSETS):
             cand, purity = sample(cfg, bottom, head_cx, fx * block, fy * block, in_cells(args.dark_cells, ri, ci))
             tried[ci, k] = (purity + (2.0 * symmetry(cand) if front else 0.0), cand)
     best_k = max(range(len(OFFSETS)), key=lambda k: sum(tried[ci, k][0] for ci in range(args.cols)))
     for ci in range(args.cols):
-        sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W] = tried[ci, best_k][1]
+        k_use = best_k
+        head_cx, eyes = geom[ci]
+
+        def out_axis(k):
+            # 原图 x -> 像素图列号：第 tx 列取的是从 head_cx + (tx - W/2)*block + dx 开始的那一块
+            tx = (eyes[0] - head_cx - OFFSETS[k][0] * block) / block + CELL_W / 2 - 0.5
+            return round(tx * 2) / 2
+
+        if eyes is not None:
+            EYE_AXIS[ri, ci] = out_axis(k_use)
+        sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W] = tried[ci, k_use][1]
 for (ri, ci), (top, bottom, x0, x1) in cells.items():
     # 角色超出格子会被裁掉，提醒一下
     if (bottom - top + 1) / block > CELL_H or (x1 - x0 + 1) / block > CELL_W + 4:
@@ -294,7 +370,7 @@ for ri in range(args.rows):
             if not filled_any:
                 break
 
-def mirror_eyes(cell):
+def mirror_eyes(cell, known_axis=None):
     """
     正脸的眼睛只有 2~3 像素宽，取样稍微错开一点就一大一小。
     找到刘海下面露出的脸（肤色）最上面那行，取它上 1 行到下 3 行（眼睛那一带），按头的中线左右镜像：
@@ -333,7 +409,8 @@ def mirror_eyes(cell):
                     same += bool((cell[y0 + y, x] == cell[y0 + y, mx]).all())
         return same / total if total else 0.0
 
-    axis = max(np.arange(round(c0 * 2) / 2 - 2, round(c0 * 2) / 2 + 2.01, 0.5), key=axis_score)
+    # 原图里找到了瞳孔就直接用两只瞳孔的正中间（最准）；闭眼等找不到时才用上面的对称度来猜
+    axis = known_axis if known_axis is not None else max(np.arange(round(c0 * 2) / 2 - 2, round(c0 * 2) / 2 + 2.01, 0.5), key=axis_score)
 
     def eye_pixels(lo, hi):
         part = cell[band, max(lo, 0):hi]
@@ -349,11 +426,40 @@ def mirror_eyes(cell):
         if fx0 <= mx <= fx1 and 0 <= mx < cell.shape[1] and mx != x:
             cell[band, mx] = cell[band, x]
 
+    # 统一眼距：原图里每帧两只瞳孔内侧都隔约 3.5 格，缩小后有的帧被刘海挤成 2 格、两眼显得太近。
+    # 量出现在的间隙，把左眼整体往外/往里挪，再镜像到右边
+    if known_axis is None or not args.eye_gap:
+        return
+    gap = eye_gap(cell, axis)
+    want = args.eye_gap if axis % 1 else args.eye_gap - 1  # 中线在两列之间时间隙是偶数，在某列正中时是奇数
+    if gap is None or gap == want or (want - gap) % 2:
+        return
+    d = (want - gap) // 2  # 每只眼往外挪几格（负数是往里）
+    inner = int(np.ceil(axis)) - 1  # 中线左边紧挨着的那一列
+    lo = max(fx0, 0)
+    orig = cell[band].copy()
+    if d > 0:
+        for x in range(lo - d, inner - d + 1):
+            if x >= 0:
+                cell[band, x] = orig[:, x + d]
+        for x in range(inner - d + 1, inner + 1):
+            cell[band, x] = orig[:, inner]  # 空出来的是两眼之间，用原来中间那一列（皮肤/刘海）补
+    else:
+        k = -d
+        for x in range(inner, lo + k - 1, -1):
+            cell[band, x] = orig[:, x - k]
+        for x in range(lo, lo + k):
+            cell[band, x] = orig[:, lo]
+    for x in range(max(lo - max(d, 0), 0), inner + 1):
+        mx = int(round(2 * axis - x))
+        if 0 <= mx < cell.shape[1] and mx != x:
+            cell[band, mx] = cell[band, x]
+
 
 for ri in range(args.rows):
     for ci in range(args.cols):
         if is_front(ri, ci) and not in_cells(args.keep_eyes, ri, ci):
-            mirror_eyes(sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W])
+            mirror_eyes(sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W], EYE_AXIS.get((ri, ci)))
 
 Image.fromarray(sheet, "RGBA").save(args.out)
 if args.preview:
