@@ -23,6 +23,7 @@ ap.add_argument("--block", type=float, default=0)
 ap.add_argument("--cell", default="32x32")
 ap.add_argument("--colors", type=int, default=20)
 ap.add_argument("--preview", default="")
+ap.add_argument("--palette", default="", help="共用调色板（make_palette.py 生成）；不给就每张图自己挑颜色")
 ap.add_argument("--ref", default="", help="用第 r,c 格（从 0 数）的高度定比例：这一格缩成 --height 高")
 ap.add_argument("--strip-tool", action="store_true", help="抠掉灰色工具头、棕色手柄/鱼竿、灰蓝水壶（游戏会自己画工具）")
 ap.add_argument("--front", default="", help="正脸格子，取样时优先保证左右对称：'0' 是第 0 行整行，'1:3' 是第 1 行第 3 列，逗号分隔")
@@ -48,10 +49,18 @@ if args.strip_tool:
     can = (g - r >= 12) & (b - r >= 40) & (b - r <= 78) & (b - g >= 20) & (b - g <= 55) & (lum > 125) & (lum < 215)
     fg &= ~(grey | brown | can)
 
-_q = Image.fromarray(np.where(fg[..., None], im, 0).astype(np.uint8)).quantize(
-    colors=args.colors + 1, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-qidx = np.array(_q)
-palette = np.array(_q.getpalette()[:3 * (args.colors + 1)]).reshape(-1, 3)
+if args.palette:
+    # 所有贴图共用一套颜色（make_palette.py 生成），肤色、发色、描边在每张图里都一样
+    palette = np.array(Image.open(args.palette).convert("RGB")).reshape(-1, 3).astype(int)
+    _pal_img = Image.new("P", (1, 1))
+    # 调色板要填满 256 色；空位用第一种颜色重复，免得像素被映射到不存在的"黑色"序号上
+    _pal_img.putpalette(palette.astype(np.uint8).flatten().tolist() + palette[0].tolist() * (256 - len(palette)))
+    qidx = np.array(Image.fromarray(im.astype(np.uint8)).quantize(palette=_pal_img, dither=Image.Dither.NONE))
+else:
+    _q = Image.fromarray(np.where(fg[..., None], im, 0).astype(np.uint8)).quantize(
+        colors=args.colors + 1, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    qidx = np.array(_q)
+    palette = np.array(_q.getpalette()[:3 * (args.colors + 1)]).reshape(-1, 3)
 DARK = palette.mean(1) < 60  # 描边、眼线、嘴这类深色
 SKIN = (palette[:, 0] >= 235) & (palette[:, 2] <= 245) & (palette[:, 0] - palette[:, 2] >= 10)
 
