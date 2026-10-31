@@ -25,6 +25,7 @@ ap.add_argument("--colors", type=int, default=20)
 ap.add_argument("--preview", default="")
 ap.add_argument("--ref", default="", help="用第 r,c 格（从 0 数）的高度定比例：这一格缩成 --height 高")
 ap.add_argument("--strip-tool", action="store_true", help="抠掉灰色工具头、棕色手柄/鱼竿、灰蓝水壶（游戏会自己画工具）")
+ap.add_argument("--front", default="", help="正脸格子，取样时优先保证左右对称：'0' 是第 0 行整行，'1:3' 是第 1 行第 3 列，逗号分隔")
 args = ap.parse_args()
 CELL_W, CELL_H = (int(v) for v in args.cell.split("x"))
 
@@ -96,18 +97,23 @@ else:
 print(f"block size {block:.2f}")
 print("cell heights:", {k: round((v[1] - v[0] + 1) / block, 1) for k, v in cells.items()})
 
-sheet = np.zeros((args.rows * CELL_H, args.cols * CELL_W, 4), dtype=np.uint8)
-for (ri, ci), (top, bottom, x0, x1) in cells.items():
-    own = np.zeros_like(fg)
-    own[top:bottom + 1, x0:x1 + 1] = True
-    cfg = fg & own
-    head_bottom = top + int((bottom - top) * 0.4)
-    hx = np.where(cfg[top:head_bottom + 1].any(0))[0]
-    head_cx = (hx.min() + hx.max()) / 2
+def is_front(ri, ci):
+    """--front 指定的正脸格子："0" 表示第 0 行整行，"1:3" 表示第 1 行第 3 列。"""
+    for item in filter(None, args.front.split(",")):
+        r_, _, c_ = item.partition(":")
+        if int(r_) == ri and (not c_ or int(c_) == ci):
+            return True
+    return False
+
+
+def sample(cfg, bottom, head_cx, dx, dy):
+    """按给定的取样起点偏移，把一格缩成 CELL_W x CELL_H。返回 (RGBA 图, 平均纯度)。"""
+    out = np.zeros((CELL_H, CELL_W, 4), dtype=np.uint8)
+    purity = []
     for ty in range(CELL_H):
         for tx in range(CELL_W):
-            sy0 = bottom + 1 - (CELL_H - ty) * block
-            sx0 = head_cx + (tx - CELL_W / 2) * block
+            sy0 = bottom + 1 - (CELL_H - ty) * block + dy
+            sx0 = head_cx + (tx - CELL_W / 2) * block + dx
             ya, yb = int(sy0 + block * 0.15), int(sy0 + block * 0.85) + 1
             xa, xb = int(sx0 + block * 0.15), int(sx0 + block * 0.85) + 1
             if ya < 0 or xa < 0 or yb > im.shape[0] or xb > im.shape[1]:
@@ -115,8 +121,56 @@ for (ri, ci), (top, bottom, x0, x1) in cells.items():
             fgb = cfg[ya:yb, xa:xb]
             if fgb.mean() < 0.5:
                 continue
-            col = palette[np.bincount(qidx[ya:yb, xa:xb][fgb]).argmax()]
-            sheet[ri * CELL_H + ty, ci * CELL_W + tx] = [*col.astype(np.uint8), 255]
+            counts = np.bincount(qidx[ya:yb, xa:xb][fgb])
+            purity.append(counts.max() / counts.sum())
+            out[ty, tx] = [*palette[counts.argmax()].astype(np.uint8), 255]
+    return out, (float(np.mean(purity)) if purity else 0.0)
+
+
+def symmetry(cell):
+    """正脸头部（最上面 12 行）的左右对称程度：左右镜像位置颜色相同的比例，取两种对称轴里更好的。"""
+    rows = np.where((cell[..., 3] > 0).any(1))[0]
+    if len(rows) == 0:
+        return 0.0
+    head = cell[rows[0]:rows[0] + 12]
+    best = 0.0
+    for axis in (CELL_W / 2 - 0.5, CELL_W / 2 - 1):  # 偶数宽（两列之间）或奇数宽（某一列正中）
+        same = total = 0
+        for x in range(CELL_W):
+            mx = int(round(2 * axis - x))
+            if mx <= x or mx >= CELL_W:
+                continue
+            a_, b_ = head[:, x], head[:, mx]
+            used = (a_[:, 3] > 0) | (b_[:, 3] > 0)
+            total += used.sum()
+            same += (used & (a_ == b_).all(1)).sum()
+        best = max(best, same / total if total else 0.0)
+    return best
+
+
+sheet = np.zeros((args.rows * CELL_H, args.cols * CELL_W, 4), dtype=np.uint8)
+# GPT 画的"像素"和我们的取样格子大小不一样，取样起点差半格，眼睛就可能一只 2 像素一只 1 像素。
+# 所以试一圈起点：正脸看左右对称，其他看每块颜色纯不纯（线条干净）。
+# 同一行是同一个方向的连续动画，整行共用一个起点，否则相邻帧会错开 1 像素、走起来抖
+OFFSETS = [(fx, fy) for fx in np.arange(-0.5, 0.5, 1 / 6) for fy in (0.0, 0.25, 0.5)]
+for ri in range(args.rows):
+    tried = {}  # (ci, 偏移序号) -> (分数, 图)
+    for ci in range(args.cols):
+        top, bottom, x0, x1 = cells[ri, ci]
+        own = np.zeros_like(fg)
+        own[top:bottom + 1, x0:x1 + 1] = True
+        cfg = fg & own
+        head_bottom = top + int((bottom - top) * 0.4)
+        hx = np.where(cfg[top:head_bottom + 1].any(0))[0]
+        head_cx = (hx.min() + hx.max()) / 2
+        front = is_front(ri, ci)
+        for k, (fx, fy) in enumerate(OFFSETS):
+            cand, purity = sample(cfg, bottom, head_cx, fx * block, fy * block)
+            tried[ci, k] = (purity + (2.0 * symmetry(cand) if front else 0.0), cand)
+    best_k = max(range(len(OFFSETS)), key=lambda k: sum(tried[ci, k][0] for ci in range(args.cols)))
+    for ci in range(args.cols):
+        sheet[ri * CELL_H:(ri + 1) * CELL_H, ci * CELL_W:(ci + 1) * CELL_W] = tried[ci, best_k][1]
+for (ri, ci), (top, bottom, x0, x1) in cells.items():
     # 角色超出格子会被裁掉，提醒一下
     if (bottom - top + 1) / block > CELL_H or (x1 - x0 + 1) / block > CELL_W + 4:
         print(f"注意：第 {ri + 1} 行第 {ci + 1} 列的角色超出了 {CELL_W}x{CELL_H} 的格子，可以加大 --cell")
