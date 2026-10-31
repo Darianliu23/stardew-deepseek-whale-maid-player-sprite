@@ -86,3 +86,46 @@ Row 2, all facing down toward the camera: 1 = shocked with wide eyes and hands u
 Bottom of every pose on the same ground line.
 Solid flat magenta background (#FF00FF), no shadows, no ground, no text, no grid lines, clear empty gaps between poses.
 ```
+
+---
+
+# 第二版：空手姿势（现在 tools / crouch / fishing 用的是这一版）
+
+## 4-tools-v2.png
+
+```text
+Use the attached sprite sheet as the exact character and style reference (same girl, same pixel size, same palette, same outline, same proportions).
+
+Draw a new pixel art sprite sheet of her miming a two-handed hoe swing with EMPTY hands, Stardew Valley style. Her hands are closed fists as if gripping a handle, but there is NO tool, NO handle, NO stick, nothing in her hands at all.
+Layout: 3 rows x 4 columns, evenly spaced, one pose per cell, each pose drawn at the SAME scale as the reference (about 22 pixels wide and 30 pixels tall in true pixel resolution, upscaled with nearest-neighbor, crisp square pixels, no anti-aliasing).
+Row 1: facing down (toward camera). Row 2: facing right. Row 3: facing up (back view).
+Columns: 1 = both fists raised high above her head, 2 = fists swinging down in front of her face, 3 = fists low in front of her knees, bending forward slightly, 4 = standing back up, fists in front of her waist.
+Feet stay on the same ground line in every cell.
+Solid flat magenta background (#FF00FF), no shadows, no ground, no text, no grid lines, clear empty gaps between poses.
+```
+
+## 6-crouch-v2.png
+
+```text
+Use the attached sprite sheet as the exact character and style reference (same girl, same pixel size, same palette, same outline, same proportions).
+
+Draw a new pixel art sprite sheet of her working close to the ground with EMPTY hands, Stardew Valley style. NO watering can, NO tools, NO items in her hands at all.
+Layout: 3 rows x 4 columns, evenly spaced, one pose per cell, each pose drawn at the SAME scale as the reference (about 22 pixels wide, up to 30 pixels tall in true pixel resolution, upscaled with nearest-neighbor, crisp square pixels, no anti-aliasing).
+Row 1: facing down (toward camera). Row 2: facing right. Row 3: facing up (back view).
+Columns: 1 = crouching and reaching one empty hand toward the ground, 2 = crouching and closing that hand as if grabbing something, 3 = standing with both empty hands held forward at chest height as if holding a handle, 4 = same but leaning forward slightly with hands tilted down as if pouring.
+Feet stay on the same ground line in every cell.
+Solid flat magenta background (#FF00FF), no shadows, no ground, no text, no grid lines, clear empty gaps between poses.
+```
+
+## 7-fishing-v2.png
+
+```text
+Use the attached sprite sheet as the exact character and style reference (same girl, same pixel size, same palette, same outline, same proportions).
+
+Draw a new pixel art sprite sheet of her miming fishing with EMPTY hands, Stardew Valley style. Her fists are held as if gripping a rod, but there is NO fishing rod, NO line, NO stick, nothing in her hands at all.
+Layout: 3 rows x 3 columns, evenly spaced, one pose per cell, each pose drawn at the SAME scale as the reference (about 22 pixels wide and 30 pixels tall in true pixel resolution, upscaled with nearest-neighbor, crisp square pixels, no anti-aliasing).
+Row 1: facing down (toward camera). Row 2: facing right. Row 3: facing up (back view).
+Columns: 1 = calmly holding both fists forward at waist height, waiting, 2 = leaning back and pulling both fists up toward her chest, 3 = leaning forward with fists lower in front of her.
+Feet stay on the same ground line in every cell.
+Solid flat magenta background (#FF00FF), no shadows, no ground, no text, no grid lines, clear empty gaps between poses.
+```
