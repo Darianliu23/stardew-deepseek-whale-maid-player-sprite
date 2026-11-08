@@ -24,6 +24,9 @@ namespace WhaleFarmer
             [Sheet.Misc] = ("misc.png", 4, 2)
         };
 
+        /// <summary>写在玩家 modData 里的“我开着鲸鱼娘外观”：modData 会随联机同步，别的玩家据此决定要不要把这个人也画成鲸鱼娘。</summary>
+        private const string EnabledKey = "Darian.WhaleFarmer/Enabled";
+
         private static ModEntry instance;
         private ModConfig config;
         private readonly Dictionary<Sheet, Texture2D> sheets = new();
@@ -73,20 +76,31 @@ namespace WhaleFarmer
                     Monitor.Log($"检测到 {helper.ModRegistry.Get(id).Manifest.Name}，它和鲸鱼娘外观都会改农夫的绘制，可能冲突。", LogLevel.Warn);
 
             helper.Events.Input.ButtonPressed += OnButtonPressed;
+            helper.Events.GameLoop.OneSecondUpdateTicked += (_, _) => PublishEnabled();
             var missing = new List<string>();
             foreach (var (sheet, layout) in SheetLayout)
                 if (!sheets.ContainsKey(sheet))
                     missing.Add(layout.File);
-            Monitor.Log($"鲸鱼娘外观已加载，按 {config.ToggleKey} 切换。"
+            Monitor.Log($"鲸鱼娘外观已加载，按 {config.ToggleKey} 切换自己的外观，按 {config.ShowOthersKey} 切换是否显示其他玩家的。"
                 + (missing.Count > 0 ? $" 还没有的姿态图（用站立姿势代替）：{string.Join("、", missing)}" : ""), LogLevel.Info);
         }
 
         private void OnButtonPressed(object sender, ButtonPressedEventArgs e)
         {
-            if (e.Button != config.ToggleKey || !Context.IsPlayerFree)
+            if (!Context.IsPlayerFree)
+                return;
+            if (e.Button == config.ShowOthersKey)
+            {
+                config.ShowOtherPlayers = !config.ShowOtherPlayers;
+                Helper.WriteConfig(config);
+                Game1.addHUDMessage(new HUDMessage(config.ShowOtherPlayers ? "其他玩家的鲸鱼娘外观：显示" : "其他玩家的鲸鱼娘外观：不显示", HUDMessage.newQuest_type));
+                return;
+            }
+            if (e.Button != config.ToggleKey)
                 return;
             config.Enabled = !config.Enabled;
             Helper.WriteConfig(config);
+            PublishEnabled();
             Game1.addHUDMessage(new HUDMessage(config.Enabled ? "鲸鱼娘外观：开" : "鲸鱼娘外观：关", HUDMessage.newQuest_type));
         }
 
@@ -111,14 +125,30 @@ namespace WhaleFarmer
             }
         }
 
-        /// <summary>只替换真正的玩家：人体模特等用临时 Farmer 画的东西保持原样。</summary>
+        /// <summary>把自己开没开外观写进 modData，同步给其他玩家。</summary>
+        private void PublishEnabled()
+        {
+            if (!Context.IsWorldReady)
+                return;
+            string value = config.Enabled ? "1" : "0";
+            if (!Game1.player.modData.TryGetValue(EnabledKey, out string old) || old != value)
+                Game1.player.modData[EnabledKey] = value;
+        }
+
+        /// <summary>
+        /// 只替换真正的玩家：人体模特等用临时 Farmer 画的东西保持原样。自己看 config.Enabled；
+        /// 其他玩家要对方装了这个模组、而且开着外观（存档里的 modData 可能是卸载前留下的，所以还要看对方现在有没有装）。
+        /// </summary>
         private bool ShouldReplace(Farmer who)
         {
-            if (!config.Enabled || who == null || !sheets.ContainsKey(Sheet.Walk))
+            if (who == null || !sheets.ContainsKey(Sheet.Walk))
                 return false;
             if (who.IsLocalPlayer)
-                return true;
-            return !config.OnlyLocalPlayer && Game1.getOnlineFarmers().Contains(who);
+                return config.Enabled;
+            return config.ShowOtherPlayers
+                && Game1.getOnlineFarmers().Contains(who)
+                && who.modData.TryGetValue(EnabledKey, out string on) && on == "1"
+                && Helper.Multiplayer.GetConnectedPlayer(who.UniqueMultiplayerID)?.GetMod(ModManifest.UniqueID) != null;
         }
 
         /// <summary>小头像：从朝下站立那一帧裁出头部（第 6~20 行、第 5~26 列），缩到和原版头像一样宽。</summary>
