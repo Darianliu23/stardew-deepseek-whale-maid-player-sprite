@@ -20,7 +20,7 @@ A SMAPI mod that replaces the Stardew Valley farmer with a chibi whale-girl maid
 ## 安装
 
 1. 安装 [SMAPI](https://smapi.io/)（4.0 以上），游戏版本 1.6.14 以上。
-2. 把 `WhaleFarmer` 文件夹（含 `WhaleFarmer.dll`、`manifest.json`、`assets`）放进游戏的 `Mods` 目录。
+2. 到 [Releases](https://github.com/Darianliu23/stardew-deepseek-whale-maid-player-sprite/releases/latest) 下载 `WhaleFarmer.zip`，把解压出来的 `WhaleFarmer` 文件夹（含 `WhaleFarmer.dll`、`manifest.json`、`assets`）放进游戏的 `Mods` 目录。更新时先关掉游戏，再替换整个文件夹（`config.json` 可以留着）。
 3. 用 SMAPI 启动游戏。
 
 从源码编译：需要 .NET 6 以上 SDK，编辑 `build.ps1` 里的工具链路径后运行它，会编译并直接装进 `Mods\WhaleFarmer`（游戏开着时 dll 被占用，先退出游戏）。
